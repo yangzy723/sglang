@@ -55,6 +55,9 @@ elif _is_hip:
 if is_npu():
     import torch_npu
 
+from sglang.manager.kernels import GeluAndMulKernel, GeluTanhAndMulKernel, SiluAndMulKernel
+from sglang.manager.kernel_manager import the_kernel_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +70,10 @@ class SiluAndMul(CustomOp):
         d = x.shape[-1] // 2
         output_shape = x.shape[:-1] + (d,)
         out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
-        silu_and_mul(x, out)
+        # Kernel Hooked
+        kernel_to_enqueue = SiluAndMulKernel(in_tensor=x, out_tensor=out)
+        the_kernel_manager.enqueue(kernel_to_enqueue)
+        # silu_and_mul(x, out)
         return out
 
     def forward_cpu(self, x: torch.Tensor) -> torch.Tensor:
@@ -99,9 +105,15 @@ class GeluAndMul(CustomOp):
         output_shape = x.shape[:-1] + (d,)
         out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
         if self.approximate == "tanh":
-            gelu_tanh_and_mul(x, out)
+            # Kernel Hooked
+            kernel_to_enqueue = GeluTanhAndMulKernel(in_tensor=x, out_tensor=out)
+            the_kernel_manager.enqueue(kernel_to_enqueue)
+            # gelu_tanh_and_mul(x, out)
         elif self.approximate == "none":
-            gelu_and_mul(x, out)
+            # Kernel Hooked
+            kernel_to_enqueue = GeluAndMulKernel(in_tensor=x, out_tensor=out)
+            the_kernel_manager.enqueue(kernel_to_enqueue)
+            # gelu_and_mul(x, out)
         else:
             raise RuntimeError("GeluAndMul only support tanh or none")
         return out

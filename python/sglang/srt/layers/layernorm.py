@@ -66,6 +66,9 @@ logger = logging.getLogger(__name__)
 if _is_npu:
     import torch_npu
 
+from sglang.manager.kernels import FusedAddRMSNormKernel, RMSNormKernel
+from sglang.manager.kernel_manager import the_kernel_manager
+
 
 class RMSNorm(CustomOp):
     def __init__(
@@ -94,9 +97,16 @@ class RMSNorm(CustomOp):
         if self.variance_size_override is not None:
             return self.forward_native(x, residual)
         if residual is not None:
-            fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+            # Kernel Hooked
+            kernel_to_enqueue = FusedAddRMSNormKernel(x, residual, self.weight.data, self.variance_epsilon)
+            the_kernel_manager.enqueue(kernel_to_enqueue)
+            # fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
             return x, residual
-        out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+        # Kernel Hooked
+        out = torch.empty_like(x)
+        kernel_to_enqueue = RMSNormKernel(x, self.weight.data, self.variance_epsilon, out)
+        the_kernel_manager.enqueue(kernel_to_enqueue)
+        # out = rmsnorm(x, self.weight.data, self.variance_epsilon)
         return out
 
     def forward_npu(

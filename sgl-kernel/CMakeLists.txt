@@ -84,6 +84,7 @@ FetchContent_Declare(
     repo-flashinfer
     GIT_REPOSITORY https://github.com/flashinfer-ai/flashinfer.git
     GIT_TAG        bc29697ba20b7e6bdb728ded98f04788e16ee021
+    # SOURCE_DIR     /home/yzy/Rebuilt-PyTorch/flashinfer-v0.4.1
     GIT_SHALLOW    OFF
 )
 FetchContent_Populate(repo-flashinfer)

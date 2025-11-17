@@ -44,6 +44,9 @@ if is_npu():
     NPU_ROTARY_MUL_MAX_NUM_HEADS = 1000
     NPU_ROTARY_MUL_MAX_HEAD_SIZE = 896
 
+from sglang.manager.kernels import BatchQKApplyRotaryPosIdsCosSinCacheKernel
+from sglang.manager.kernel_manager import the_kernel_manager
+
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
@@ -259,20 +262,31 @@ class RotaryEmbedding(CustomOp):
             and (self.head_size in [64, 128, 256, 512])
             and self.dtype != torch.float32
         ):
-            apply_rope_with_cos_sin_cache_inplace(
+            # Kernel Hooked
+            kernel_to_enqueue=BatchQKApplyRotaryPosIdsCosSinCacheKernel(
                 positions=positions,
-                query=query,
-                key=key,
+                Q=query,
+                K=key,
                 head_size=self.head_size,
                 cos_sin_cache=self.cos_sin_cache,
                 is_neox=self.is_neox_style,
-                # Compatible with old sgl-kernel
-                **(
-                    dict(fused_set_kv_buffer_arg=fused_set_kv_buffer_arg)
-                    if fused_set_kv_buffer_arg is not None
-                    else {}
-                ),
+                fused_set_kv_buffer_arg=fused_set_kv_buffer_arg
             )
+            the_kernel_manager.enqueue(kernel_to_enqueue)
+            # apply_rope_with_cos_sin_cache_inplace(
+            #     positions=positions,
+            #     query=query,
+            #     key=key,
+            #     head_size=self.head_size,
+            #     cos_sin_cache=self.cos_sin_cache,
+            #     is_neox=self.is_neox_style,
+            #     # Compatible with old sgl-kernel
+            #     **(
+            #         dict(fused_set_kv_buffer_arg=fused_set_kv_buffer_arg)
+            #         if fused_set_kv_buffer_arg is not None
+            #         else {}
+            #     ),
+            # )
         else:
             assert (
                 fused_set_kv_buffer_arg is None
