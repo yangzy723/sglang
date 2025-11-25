@@ -57,6 +57,9 @@ if TYPE_CHECKING:
     from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
     from sglang.srt.speculative.spec_info import SpecInput, SpeculativeAlgorithm
 
+from sglang.manager.kernels import ComputePositionKernel
+from sglang.manager.kernel_manager import the_kernel_manager
+
 _is_npu = is_npu()
 
 
@@ -986,13 +989,25 @@ def compute_position_triton(
     )
 
     # Launch kernel
-    compute_position_kernel[(batch_size,)](
-        positions,
-        extend_start_loc,
-        extend_prefix_lens,
-        extend_seq_lens,
-        has_prefix,
+
+    # Kernel Hooked
+    kernel_to_enqueue = ComputePositionKernel(
+        positions=positions,
+        extend_start_loc=extend_start_loc,
+        extend_prefix_lens=extend_prefix_lens,
+        extend_seq_lens=extend_seq_lens,
+        has_prefix=has_prefix,
+        batch_size=batch_size,
     )
+    the_kernel_manager.enqueue(kernel_to_enqueue)
+
+    # compute_position_kernel[(batch_size,)](
+    #     positions,
+    #     extend_start_loc,
+    #     extend_prefix_lens,
+    #     extend_seq_lens,
+    #     has_prefix,
+    # )
 
     return positions, extend_start_loc
 

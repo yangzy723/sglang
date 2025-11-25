@@ -18,6 +18,9 @@ from sglang.srt.utils import support_triton
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
 
+from sglang.manager.kernels import WriteReqToTokenPoolTriton
+from sglang.manager.kernel_manager import the_kernel_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,16 +94,31 @@ def write_cache_indices(
             device=req_to_token_pool.device,
         )
         # TODO: some tensors can be reused for ForwardBatchInfo (e.g., extend_lens, cumsum_start)
-        write_req_to_token_pool_triton[(req_pool_indices_tensor.shape[0],)](
-            req_to_token_pool.req_to_token,
-            req_pool_indices_tensor,
-            prefix_pointers,
-            prefix_lens_tensor,
-            seq_lens_tensor,
-            extend_lens_tensor,
-            out_cache_loc,
-            req_to_token_pool.req_to_token.shape[1],
+
+        # Kernel Hooked
+        kernel_to_enqueue = WriteReqToTokenPoolTriton(
+            req_to_token=req_to_token_pool.req_to_token,
+            req_pool_indices_tensor=req_pool_indices_tensor,
+            prefix_pointers=prefix_pointers,
+            prefix_lens_tensor=prefix_lens_tensor,
+            seq_lens_tensor=seq_lens_tensor,
+            extend_lens_tensor=extend_lens_tensor,
+            out_cache_loc=out_cache_loc,
+            shape1=req_to_token_pool.req_to_token.shape[1],
+            shape0=req_pool_indices_tensor.shape[0],
         )
+        the_kernel_manager.enqueue(kernel_to_enqueue)
+
+        # write_req_to_token_pool_triton[(req_pool_indices_tensor.shape[0],)](
+        #     req_to_token_pool.req_to_token,
+        #     req_pool_indices_tensor,
+        #     prefix_pointers,
+        #     prefix_lens_tensor,
+        #     seq_lens_tensor,
+        #     extend_lens_tensor,
+        #     out_cache_loc,
+        #     req_to_token_pool.req_to_token.shape[1],
+        # )
     else:
         pt = 0
         for i in range(req_pool_indices_cpu.shape[0]):

@@ -54,7 +54,7 @@ elif _is_hip:
 
 if is_npu():
     import torch_npu
-
+    
 from sglang.manager.kernels import GeluAndMulKernel, GeluTanhAndMulKernel, SiluAndMulKernel
 from sglang.manager.kernel_manager import the_kernel_manager
 

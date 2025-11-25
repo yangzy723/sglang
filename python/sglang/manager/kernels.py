@@ -6,7 +6,10 @@ from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
 from sgl_kernel import fused_add_rmsnorm, rmsnorm
 from sgl_kernel import FusedSetKVBufferArg, apply_rope_with_cos_sin_cache_inplace
 
+from .my_triton import compute_position_kernel, write_req_to_token_pool_triton
 
+
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
 class GeluAndMulKernel(Kernel):
     def __init__(self, in_tensor: torch.Tensor, out_tensor: torch.Tensor):
         """
@@ -28,6 +31,7 @@ class GeluAndMulKernel(Kernel):
         gelu_and_mul(self.in_tensor, self.out_tensor)
 
 
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
 class GeluTanhAndMulKernel(Kernel):
     def __init__(self, in_tensor: torch.Tensor, out_tensor: torch.Tensor):
         super().__init__()        
@@ -38,6 +42,7 @@ class GeluTanhAndMulKernel(Kernel):
         gelu_tanh_and_mul(self.in_tensor, self.out_tensor)
 
 
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
 class SiluAndMulKernel(Kernel):
     def __init__(self, in_tensor: torch.Tensor, out_tensor: torch.Tensor):
         super().__init__()        
@@ -109,4 +114,69 @@ class BatchQKApplyRotaryPosIdsCosSinCacheKernel(Kernel):
                 if self.fused_set_kv_buffer_arg is not None
                 else {}
             ),
+        )
+
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/model_executor/forward_batch_info.py
+class ComputePositionKernel(Kernel):
+    def __init__(
+        self,
+        positions: torch.Tensor,
+        extend_start_loc: torch.Tensor,
+        extend_prefix_lens: torch.Tensor,
+        extend_seq_lens: torch.Tensor,
+        has_prefix: bool,
+        batch_size: int
+    ):
+        super().__init__()
+        self.positions = positions
+        self.extend_start_loc = extend_start_loc
+        self.extend_prefix_lens = extend_prefix_lens
+        self.extend_seq_lens = extend_seq_lens
+        self.has_prefix = has_prefix
+        self.batch_size = batch_size
+    
+    def execute(self):
+        compute_position_kernel[(self.batch_size,)](
+        self.positions,
+        self.extend_start_loc,
+        self.extend_prefix_lens,
+        self.extend_seq_lens,
+        self.has_prefix,
+    )
+
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/mem_cache/common.py
+class WriteReqToTokenPoolTriton(Kernel):
+    def __init__(
+        self,
+        req_to_token: torch.Tensor,
+        req_pool_indices_tensor: torch.Tensor,
+        prefix_pointers: torch.Tensor,
+        prefix_lens_tensor: torch.Tensor,
+        seq_lens_tensor: torch.Tensor,
+        extend_lens_tensor: torch.Tensor,
+        out_cache_loc: torch.Tensor,
+        shape1: int,
+        shape0: int
+    ):
+        super().__init__()
+        self.req_to_token = req_to_token
+        self.req_pool_indices_tensor = req_pool_indices_tensor
+        self.prefix_pointers = prefix_pointers
+        self.prefix_lens_tensor = prefix_lens_tensor
+        self.seq_lens_tensor = seq_lens_tensor
+        self.extend_lens_tensor = extend_lens_tensor
+        self.out_cache_loc = out_cache_loc
+        self.shape1 = shape1
+        self.shape0 = shape0
+    
+    def execute(self):
+        write_req_to_token_pool_triton[(self.shape0,)](
+            self.req_to_token,
+            self.req_pool_indices_tensor,
+            self.prefix_pointers,
+            self.prefix_lens_tensor,
+            self.seq_lens_tensor,
+            self.extend_lens_tensor,
+            self.out_cache_loc,
+            self.shape1
         )
