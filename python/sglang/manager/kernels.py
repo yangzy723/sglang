@@ -1,12 +1,13 @@
 import torch
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 from sglang.manager.kernel_manager import Kernel
 from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
 from sgl_kernel import fused_add_rmsnorm, rmsnorm
 from sgl_kernel import FusedSetKVBufferArg, apply_rope_with_cos_sin_cache_inplace
+from sgl_kernel.flash_attn import flash_attn_with_kvcache
 
-from .my_triton import compute_position_kernel, write_req_to_token_pool_triton
+from sglang.manager.my_triton import compute_position_kernel, write_req_to_token_pool_triton
 
 
 # Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
@@ -180,3 +181,80 @@ class WriteReqToTokenPoolTriton(Kernel):
             self.out_cache_loc,
             self.shape1
         )
+
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/attention/flashattention_backend.py
+class FlashAttnWithKVCacheKernel(Kernel):
+    def __init__(
+        self,
+        out_tensor: torch.Tensor,
+        q: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        page_table: Optional[torch.Tensor],
+        cache_seqlens: Optional[torch.Tensor],
+        cu_seqlens_q: Optional[torch.Tensor],
+        cu_seqlens_k_new: Optional[torch.Tensor],
+        max_seqlen_q: int,
+        softmax_scale: float,
+        causal: bool,
+        window_size: Tuple[int, int],
+        softcap: float,
+        k_descale: Optional[torch.Tensor],
+        v_descale: Optional[torch.Tensor],
+        return_softmax_lse: bool,
+        num_splits: int,
+        ver: int,
+        sinks: Optional[torch.Tensor]
+    ):
+        super().__init__()
+        # 输出占位符
+        self.out_tensor = out_tensor
+        
+        # 输入参数
+        self.q = q
+        self.k_cache = k_cache
+        self.v_cache = v_cache
+        self.page_table = page_table
+        self.cache_seqlens = cache_seqlens
+        self.cu_seqlens_q = cu_seqlens_q
+        self.cu_seqlens_k_new = cu_seqlens_k_new
+        self.max_seqlen_q = max_seqlen_q
+        self.softmax_scale = softmax_scale
+        self.causal = causal
+        self.window_size = window_size
+        self.softcap = softcap
+        self.k_descale = k_descale
+        self.v_descale = v_descale
+        self.return_softmax_lse = return_softmax_lse
+        self.num_splits = num_splits
+        self.ver = ver
+        self.sinks = sinks
+
+    def execute(self):
+
+        out = flash_attn_with_kvcache(
+            q=self.q,
+            k_cache=self.k_cache,
+            v_cache=self.v_cache,
+            page_table=self.page_table,
+            cache_seqlens=self.cache_seqlens,
+            cu_seqlens_q=self.cu_seqlens_q,
+            cu_seqlens_k_new=self.cu_seqlens_k_new,
+            max_seqlen_q=self.max_seqlen_q,
+            softmax_scale=self.softmax_scale,
+            causal=self.causal,
+            window_size=self.window_size,
+            softcap=self.softcap,
+            k_descale=self.k_descale,
+            v_descale=self.v_descale,
+            return_softmax_lse=self.return_softmax_lse,
+            num_splits=self.num_splits,
+            ver=self.ver,
+            sinks=self.sinks
+        )
+        
+        # 如果 return_softmax_lse 为 True，结果是 tuple (out, softmax_lse)，取第一个
+        if isinstance(out, tuple):
+            self.out_tensor.copy_(out[0])
+        else:
+            self.out_tensor.copy_(out)

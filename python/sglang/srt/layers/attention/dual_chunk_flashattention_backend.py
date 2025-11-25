@@ -366,6 +366,7 @@ class DualChunkFlashAttentionBackend(AttentionBackend):
 
         if not save_kv_cache:
             # profile run
+            # NO CALLED
             o = flash_attn_varlen_func(
                 q=query,
                 k=key,
@@ -1400,6 +1401,7 @@ class DualChunkFlashAttentionBackend(AttentionBackend):
                 s_lse = s_lse.view(q_len, q_heads, 1).transpose(0, 2).float()
             return res, s_lse
 
+        # NO CALLED
         output, softmax_lse, *rest = flash_attn_varlen_func(
             q=query_states,
             k=key_states,

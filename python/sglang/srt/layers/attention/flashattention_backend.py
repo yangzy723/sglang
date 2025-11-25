@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 from sgl_kernel import merge_state_v2
 from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
+from sglang.manager.kernels import FlashAttnWithKVCacheKernel
+from sglang.manager.kernel_manager import the_kernel_manager
+
 
 @dataclass
 class FlashAttentionMetadata:
@@ -659,6 +662,7 @@ class FlashAttentionBackend(AttentionBackend):
         k_rope: Optional[torch.Tensor] = None,
         sinks: Optional[torch.Tensor] = None,
     ):
+
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -772,9 +776,17 @@ class FlashAttentionBackend(AttentionBackend):
                 cache_seqlens = metadata.encoder_lens_int32
                 cu_seqlens_k = metadata.encoder_cu_seqlens_k
                 window_size = (-1, -1)
+            
 
-            result = flash_attn_with_kvcache(
-                q=q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
+            # KERNEL HOOKED 
+            q_reshaped = q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim)
+            result_tensor = torch.empty_like(q_reshaped)
+            current_ver = kwargs.get("ver", 3)
+            current_sinks = kwargs.get("sinks", None)
+
+            kernel_to_enqueue = FlashAttnWithKVCacheKernel(
+                out_tensor=result_tensor,
+                q=q_reshaped,
                 k_cache=key_cache,
                 v_cache=value_cache,
                 page_table=page_table,
@@ -790,8 +802,31 @@ class FlashAttentionBackend(AttentionBackend):
                 v_descale=v_descale,
                 return_softmax_lse=use_cascade_attn,
                 num_splits=self.num_splits,
-                **kwargs,
+                ver=current_ver,
+                sinks=current_sinks
             )
+            the_kernel_manager.enqueue(kernel_to_enqueue)
+            result = result_tensor
+
+            # result = flash_attn_with_kvcache(
+            #     q=q.contiguous().view(-1, layer.tp_q_head_num, layer.head_dim),
+            #     k_cache=key_cache,
+            #     v_cache=value_cache,
+            #     page_table=page_table,
+            #     cache_seqlens=cache_seqlens,
+            #     cu_seqlens_q=cu_seqlens_q,
+            #     cu_seqlens_k_new=cu_seqlens_k if not use_local_attn else None,
+            #     max_seqlen_q=max_seqlen_q,
+            #     softmax_scale=layer.scaling,
+            #     causal=False if use_cascade_attn else causal,
+            #     window_size=window_size,
+            #     softcap=layer.logit_cap,
+            #     k_descale=k_descale,
+            #     v_descale=v_descale,
+            #     return_softmax_lse=use_cascade_attn,
+            #     num_splits=self.num_splits,
+            #     **kwargs,
+            # )
 
             if use_cascade_attn:
                 o, softmax_lse, *rest = result
@@ -840,6 +875,7 @@ class FlashAttentionBackend(AttentionBackend):
                     assert chunk_idx >= 0
 
                     assert forward_batch.mha_return_lse
+                    # NO CALLED
                     output = flash_attn_varlen_func(
                         q=q.view(-1, layer.tp_q_head_num, layer.head_dim),
                         k=k.view(-1, layer.tp_k_head_num, layer.head_dim).to(q.dtype),
@@ -855,6 +891,7 @@ class FlashAttentionBackend(AttentionBackend):
                     )
                 else:
                     # MHA for extend part of sequence without attending prefix kv cache
+                    # NO CALLED
                     output = flash_attn_varlen_func(
                         q=q.view(-1, layer.tp_q_head_num, layer.head_dim),
                         k=k.view(-1, layer.tp_k_head_num, layer.head_dim).to(q.dtype),
@@ -965,6 +1002,7 @@ class FlashAttentionBackend(AttentionBackend):
         k_rope: Optional[torch.Tensor] = None,
         sinks: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+
         assert self.fa_impl_ver in [3], "Only FA3 support decoding"
         if k is not None:
             assert v is not None
@@ -1092,9 +1130,15 @@ class FlashAttentionBackend(AttentionBackend):
                 q_reshaped = q.contiguous().view(
                     -1, layer.tp_q_head_num, layer.head_dim
                 )
-
                 # Default: single-token self-attention
-                result = flash_attn_with_kvcache(
+                
+                # KERNEL HOOKED 
+                result_tensor = torch.empty_like(q_reshaped)
+                current_ver = kwargs.get("ver", 3)
+                current_sinks = kwargs.get("sinks", None)
+
+                kernel_to_enqueue = FlashAttnWithKVCacheKernel(
+                    out_tensor=result_tensor,
                     q=q_reshaped,
                     k_cache=key_cache,
                     v_cache=value_cache,
@@ -1111,8 +1155,32 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=use_cascade_attn,
                     num_splits=self.num_splits,
-                    **kwargs,
+                    ver=current_ver,
+                    sinks=current_sinks
                 )
+                the_kernel_manager.enqueue(kernel_to_enqueue)
+                result = result_tensor
+
+                # result = flash_attn_with_kvcache(
+                #     q=q_reshaped,
+                #     k_cache=key_cache,
+                #     v_cache=value_cache,
+                #     page_table=page_table,
+                #     cache_seqlens=cache_seqlens,
+                #     cu_seqlens_q=metadata.cu_seqlens_q,
+                #     cu_seqlens_k_new=cu_seqlens_k,
+                #     max_seqlen_q=max_seqlen_q,
+                #     softmax_scale=layer.scaling,
+                #     causal=False if use_cascade_attn else causal,
+                #     window_size=window_size,
+                #     softcap=layer.logit_cap,
+                #     k_descale=k_descale,
+                #     v_descale=v_descale,
+                #     return_softmax_lse=use_cascade_attn,
+                #     num_splits=self.num_splits,
+                #     **kwargs,
+                # )
+
                 if use_cascade_attn:
                     o, softmax_lse, *rest = result
                     o_expand, softmax_lse_expand, *rest_expand = (
