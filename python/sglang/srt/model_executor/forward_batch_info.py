@@ -57,10 +57,10 @@ if TYPE_CHECKING:
     from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
     from sglang.srt.speculative.spec_info import SpecInput, SpeculativeAlgorithm
 
-from sglang.manager.kernels import ComputePositionKernel
+from sglang.manager.kernels import ComputePositionKernel, ClampPosition
 from sglang.manager.kernel_manager import the_kernel_manager
 
-_is_npu = is_npu()
+# _is_npu = is_npu()
 
 
 class ForwardMode(IntEnum):
@@ -415,7 +415,18 @@ class ForwardBatch:
         # Init position information
         if ret.forward_mode.is_decode() or ret.forward_mode.is_target_verify():
             if ret.positions is None:
-                ret.positions = clamp_position(batch.seq_lens)
+                # Kernel Hooked
+                ret.positions = torch.empty_like(
+                    batch.seq_lens, 
+                    dtype=torch.int64
+                )
+                kernel_to_enqueue = ClampPosition(batch.seq_lens, ret.positions)
+                the_kernel_manager.enqueue(kernel_to_enqueue)
+                # ret.positions = clamp_position(batch.seq_lens)
+                # with torch.cuda.nvtx.range("Target_Clamp"):
+                #     ret.positions = clamp_position(batch.seq_lens)
+                #     # 【临时添加】强制等待 GPU 执行完再结束 NVTX 标记
+                #     torch.cuda.synchronize()
         else:
             assert isinstance(batch.extend_seq_lens, list)
             assert isinstance(batch.extend_prefix_lens, list)
@@ -1059,9 +1070,9 @@ def compute_position_torch(
     return positions.to(torch.int64), extend_start_loc
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
-def clamp_position(seq_lens):
-    return torch.clamp((seq_lens - 1), min=0).to(torch.int64)
+# @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
+# def clamp_position(seq_lens):
+#     return torch.clamp((seq_lens - 1), min=0).to(torch.int64)
 
 
 @triton.jit

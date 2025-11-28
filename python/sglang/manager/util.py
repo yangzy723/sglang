@@ -1,5 +1,10 @@
+import torch
 import triton
 import triton.language as tl
+
+from sglang.srt.utils import get_compiler_backend, is_npu
+
+_is_npu = is_npu()
 
 @triton.jit
 def compute_position_kernel(
@@ -80,3 +85,7 @@ def write_req_to_token_pool_triton(
             value,
             mask=mask,
         )
+
+@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
+def clamp_position(seq_lens):
+    return torch.clamp((seq_lens - 1), min=0).to(torch.int64)

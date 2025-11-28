@@ -1,13 +1,13 @@
 import torch
 from typing import Optional, Tuple, Union
 
-from sglang.manager.kernel_manager import Kernel
 from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
 from sgl_kernel import fused_add_rmsnorm, rmsnorm
 from sgl_kernel import FusedSetKVBufferArg, apply_rope_with_cos_sin_cache_inplace
 from sgl_kernel.flash_attn import flash_attn_with_kvcache
 
-from sglang.manager.my_triton import compute_position_kernel, write_req_to_token_pool_triton
+from sglang.manager.kernel_manager import Kernel
+from sglang.manager.util import compute_position_kernel, write_req_to_token_pool_triton, clamp_position
 
 
 # Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
@@ -258,3 +258,14 @@ class FlashAttnWithKVCacheKernel(Kernel):
             self.out_tensor.copy_(out[0])
         else:
             self.out_tensor.copy_(out)
+
+# Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/model_executor/forward_batch_info.py
+class ClampPosition(Kernel):
+    def __init__(self, seq_lens: int, out_tensor: torch.Tensor):
+        super().__init__()
+        self.seq_lens = seq_lens
+        self.out_tensor = out_tensor
+    
+    def execute(self):
+        out = clamp_position(self.seq_lens)
+        self.out_tensor.copy_(out)
