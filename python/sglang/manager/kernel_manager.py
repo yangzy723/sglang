@@ -26,7 +26,7 @@ def create_request_message(req_id: str, kernel_type: str) -> bytes:
 
 class SPSCQueue:
     """
-    单生产者单消费者无锁队列的 Python 实现。
+    单生产者单消费者无锁队列的 Python 实现（高性能版本）。
     与 C++ 端的 SPSCQueue 结构布局一致。
     """
     
@@ -38,122 +38,113 @@ class SPSCQueue:
     def __init__(self, shm_view: memoryview, offset: int):
         """
         初始化 SPSC 队列视图。
-        
-        参数:
-            shm_view: 共享内存的 memoryview
-            offset: 此队列在共享内存中的偏移量
         """
         self.shm = shm_view
         self.base_offset = offset
+        # 预计算常用偏移量
+        self._head_abs = self.base_offset + self.HEAD_OFFSET
+        self._tail_abs = self.base_offset + self.TAIL_OFFSET
+        self._buffer_abs = self.base_offset + self.BUFFER_OFFSET
         
-    def _read_u64(self, offset: int) -> int:
-        """原子读取 64 位无符号整数"""
-        return struct.unpack_from('<Q', self.shm, self.base_offset + offset)[0]
+    def _read_u64(self, abs_offset: int) -> int:
+        """读取 64 位无符号整数（使用绝对偏移）"""
+        return struct.unpack_from('<Q', self.shm, abs_offset)[0]
     
-    def _write_u64(self, offset: int, value: int):
-        """原子写入 64 位无符号整数"""
-        struct.pack_into('<Q', self.shm, self.base_offset + offset, value)
+    def _write_u64(self, abs_offset: int, value: int):
+        """写入 64 位无符号整数（使用绝对偏移）"""
+        struct.pack_into('<Q', self.shm, abs_offset, value)
     
     def try_push(self, data: bytes) -> bool:
         """尝试写入消息，返回 True 表示成功，False 表示队列已满"""
-        current_tail = self._read_u64(self.TAIL_OFFSET)
+        current_tail = self._read_u64(self._tail_abs)
         next_tail = (current_tail + 1) % SPSC_QUEUE_SIZE
         
         # 检查队列是否已满
-        if next_tail == self._read_u64(self.HEAD_OFFSET):
+        if next_tail == self._read_u64(self._head_abs):
             return False
         
         # 写入数据
         copy_len = min(len(data), SPSC_MSG_SIZE - 1)
-        msg_offset = self.base_offset + self.BUFFER_OFFSET + current_tail * SPSC_MSG_SIZE
+        msg_offset = self._buffer_abs + current_tail * SPSC_MSG_SIZE
         
-        # 使用切片操作，更高效
+        # 使用切片操作写入
         self.shm[msg_offset:msg_offset + copy_len] = data[:copy_len]
         # 确保字符串结尾
         if copy_len < SPSC_MSG_SIZE:
             self.shm[msg_offset + copy_len] = 0
         
         # 发布写入
-        self._write_u64(self.TAIL_OFFSET, next_tail)
+        self._write_u64(self._tail_abs, next_tail)
         return True
     
     def try_pop(self) -> Optional[bytes]:
         """尝试读取消息，返回消息内容或 None（队列为空）"""
-        current_head = self._read_u64(self.HEAD_OFFSET)
+        current_head = self._read_u64(self._head_abs)
         
         # 检查队列是否为空
-        if current_head == self._read_u64(self.TAIL_OFFSET):
+        if current_head == self._read_u64(self._tail_abs):
             return None
         
         # 读取数据
-        msg_offset = self.base_offset + self.BUFFER_OFFSET + current_head * SPSC_MSG_SIZE
+        msg_offset = self._buffer_abs + current_head * SPSC_MSG_SIZE
         
-        # 转换为 bytes 后查找字符串结尾
-        msg_bytes = bytes(self.shm[msg_offset:msg_offset + SPSC_MSG_SIZE])
-        try:
-            end = msg_bytes.index(0)
-        except ValueError:
-            end = SPSC_MSG_SIZE
+        # 优化：典型消息长度约 30-50 字节，先读取 64 字节
+        first_chunk = bytes(self.shm[msg_offset:msg_offset + 64])
+        null_pos = first_chunk.find(b'\x00')
         
-        data = msg_bytes[:end]
+        if null_pos >= 0:
+            # 找到了结尾，消息在前 64 字节内
+            data = first_chunk[:null_pos]
+        else:
+            # 消息较长，读取剩余部分
+            rest = bytes(self.shm[msg_offset + 64:msg_offset + SPSC_MSG_SIZE])
+            null_pos = rest.find(b'\x00')
+            if null_pos >= 0:
+                data = first_chunk + rest[:null_pos]
+            else:
+                data = first_chunk + rest
         
         # 提交读取
-        self._write_u64(self.HEAD_OFFSET, (current_head + 1) % SPSC_QUEUE_SIZE)
+        self._write_u64(self._head_abs, (current_head + 1) % SPSC_QUEUE_SIZE)
         return data
     
     def push_blocking(self, data: bytes, timeout_ms: int = -1) -> bool:
-        """阻塞式写入（带超时）- 优化版本：忙等待+退避"""
-        import time as time_module
-        spin_count = 0
-        start_time = time_module.perf_counter() if timeout_ms >= 0 else None
-        
-        while True:
-            if self.try_push(data):
-                return True
-            
-            if timeout_ms >= 0 and start_time:
-                elapsed_ms = (time_module.perf_counter() - start_time) * 1000
-                if elapsed_ms >= timeout_ms:
+        """阻塞式写入 - 高性能版本：纯忙等待（高频场景）"""
+        # 对于高频场景，直接忙等待比 sleep 更快
+        # 因为 Python 的 time.sleep() 最小精度约 1ms
+        if timeout_ms < 0:
+            # 无超时，纯忙等待
+            while not self.try_push(data):
+                pass
+            return True
+        else:
+            # 有超时
+            start = time.perf_counter()
+            deadline = start + timeout_ms / 1000.0
+            while True:
+                if self.try_push(data):
+                    return True
+                if time.perf_counter() >= deadline:
                     return False
-            
-            # 忙等待策略：前 1000 次快速轮询，然后逐渐增加延迟
-            if spin_count < 1000:
-                # Python 中没有 pause 指令，但可以尝试快速轮询
-                spin_count += 1
-            elif spin_count < 10000:
-                if spin_count % 100 == 0:
-                    time.sleep(0.000001)  # 1 微秒（尽可能短）
-                spin_count += 1
-            else:
-                time.sleep(0.00001)  # 10 微秒
-                spin_count = 0
     
     def pop_blocking(self, timeout_ms: int = -1) -> Optional[bytes]:
-        """阻塞式读取（带超时）- 优化版本：忙等待+退避"""
-        import time as time_module
-        spin_count = 0
-        start_time = time_module.perf_counter() if timeout_ms >= 0 else None
-        
-        while True:
-            result = self.try_pop()
-            if result is not None:
-                return result
-            
-            if timeout_ms >= 0 and start_time:
-                elapsed_ms = (time_module.perf_counter() - start_time) * 1000
-                if elapsed_ms >= timeout_ms:
+        """阻塞式读取 - 高性能版本：纯忙等待（高频场景）"""
+        if timeout_ms < 0:
+            # 无超时，纯忙等待
+            while True:
+                result = self.try_pop()
+                if result is not None:
+                    return result
+        else:
+            # 有超时
+            start = time.perf_counter()
+            deadline = start + timeout_ms / 1000.0
+            while True:
+                result = self.try_pop()
+                if result is not None:
+                    return result
+                if time.perf_counter() >= deadline:
                     return None
-            
-            # 忙等待策略：前 1000 次快速轮询，然后逐渐增加延迟
-            if spin_count < 1000:
-                spin_count += 1
-            elif spin_count < 10000:
-                if spin_count % 100 == 0:
-                    time.sleep(0.000001)  # 1 微秒（尽可能短）
-                spin_count += 1
-            else:
-                time.sleep(0.00001)  # 10 微秒
-                spin_count = 0
 
 
 class ClientChannel:
