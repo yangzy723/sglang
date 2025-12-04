@@ -2,16 +2,20 @@ import socket
 import threading
 import abc
 import sys
+import os
 from typing import Optional
 
 # --- Configuration ---
 SCHEDULER_PORT = 9999
 LOCALHOST = "127.0.0.1"
 CLIENT_ID = "sglang"
+UNIQUE_ID = os.getenv("UNIQUE_ID")
 
 def create_request_message(req_id: str, kernel_type: str) -> bytes:
-    """构建符合协议的消息: {kernel_type}|{req_id}|{client_id}"""
-    return f"{kernel_type}|{req_id}|{CLIENT_ID}\n".encode('utf-8')
+    """
+    构建符合协议的消息: {kernel_type}|{req_id}|{client_id}|{unique_id}
+    """
+    return f"{kernel_type}|{req_id}|{CLIENT_ID}|{UNIQUE_ID}\n".encode('utf-8')
 
 # --- Abstract Base Class ---
 
@@ -26,9 +30,7 @@ class Kernel(abc.ABC):
 class KernelManager:
     """
     单例客户端，用于管理与 C++ 调度器的通信。
-    设计目标：线程安全、故障恢复、静默运行（仅报错时输出）。
     """
-    
     def __init__(self):
         self.sock: Optional[socket.socket] = None
         self.rfile = None
@@ -37,15 +39,14 @@ class KernelManager:
         
         try:
             self._connect_to_scheduler()
-            # 仅在初始化成功时打印一次，后续保持静默
-            print("[KernelManager] Connected to Scheduler.")
+            print(f"[KernelManager] Connected to Scheduler (UNIQUE_ID: {UNIQUE_ID}).")
         except Exception as e:
             print(f"[KernelManager] Initialization failed: {e}", file=sys.stderr)
             raise
 
     def _connect_to_scheduler(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(5.0) # 设置超时防止死锁
+        self.sock.settimeout(5.0) 
         self.sock.connect((LOCALHOST, SCHEDULER_PORT))
         self.rfile = self.sock.makefile('rb')
 
@@ -54,15 +55,6 @@ class KernelManager:
         return f"req_{self.request_id_counter}"
 
     def enqueue(self, kernel: Kernel):
-        """
-        向调度器提交内核。阻塞直到收到响应。
-        
-        流程:
-        1. 发送请求
-        2. 等待批准
-        3. 如果批准 -> 执行 kernel.execute()
-        4. 如果拒绝 -> 打印错误日志
-        """
         with self.lock:
             if not self.sock or not self.rfile:
                 print("[KernelManager] Error: Not connected.", file=sys.stderr)
