@@ -67,13 +67,11 @@ class SPSCQueue:
         copy_len = min(len(data), SPSC_MSG_SIZE - 1)
         msg_offset = self.base_offset + self.BUFFER_OFFSET + current_tail * SPSC_MSG_SIZE
         
-        # 清空消息槽
-        for i in range(SPSC_MSG_SIZE):
-            self.shm[msg_offset + i] = 0
-        
-        # 写入数据
-        for i in range(copy_len):
-            self.shm[msg_offset + i] = data[i]
+        # 使用切片操作，更高效
+        self.shm[msg_offset:msg_offset + copy_len] = data[:copy_len]
+        # 确保字符串结尾
+        if copy_len < SPSC_MSG_SIZE:
+            self.shm[msg_offset + copy_len] = 0
         
         # 发布写入
         self._write_u64(self.TAIL_OFFSET, next_tail)
@@ -90,45 +88,72 @@ class SPSCQueue:
         # 读取数据
         msg_offset = self.base_offset + self.BUFFER_OFFSET + current_head * SPSC_MSG_SIZE
         
-        # 找到字符串结尾
-        end = 0
-        for i in range(SPSC_MSG_SIZE):
-            if self.shm[msg_offset + i] == 0:
-                break
-            end = i + 1
+        # 转换为 bytes 后查找字符串结尾
+        msg_bytes = bytes(self.shm[msg_offset:msg_offset + SPSC_MSG_SIZE])
+        try:
+            end = msg_bytes.index(0)
+        except ValueError:
+            end = SPSC_MSG_SIZE
         
-        data = bytes(self.shm[msg_offset:msg_offset + end])
+        data = msg_bytes[:end]
         
         # 提交读取
         self._write_u64(self.HEAD_OFFSET, (current_head + 1) % SPSC_QUEUE_SIZE)
         return data
     
     def push_blocking(self, data: bytes, timeout_ms: int = -1) -> bool:
-        """阻塞式写入（带超时）"""
-        elapsed = 0
+        """阻塞式写入（带超时）- 优化版本：忙等待+退避"""
+        import time as time_module
+        spin_count = 0
+        start_time = time_module.perf_counter() if timeout_ms >= 0 else None
+        
         while True:
             if self.try_push(data):
                 return True
             
-            if timeout_ms >= 0 and elapsed >= timeout_ms:
-                return False
+            if timeout_ms >= 0 and start_time:
+                elapsed_ms = (time_module.perf_counter() - start_time) * 1000
+                if elapsed_ms >= timeout_ms:
+                    return False
             
-            time.sleep(0.0001)  # 100 微秒
-            elapsed += 1  # 粗略计时
+            # 忙等待策略：前 1000 次快速轮询，然后逐渐增加延迟
+            if spin_count < 1000:
+                # Python 中没有 pause 指令，但可以尝试快速轮询
+                spin_count += 1
+            elif spin_count < 10000:
+                if spin_count % 100 == 0:
+                    time.sleep(0.000001)  # 1 微秒（尽可能短）
+                spin_count += 1
+            else:
+                time.sleep(0.00001)  # 10 微秒
+                spin_count = 0
     
     def pop_blocking(self, timeout_ms: int = -1) -> Optional[bytes]:
-        """阻塞式读取（带超时）"""
-        elapsed = 0
+        """阻塞式读取（带超时）- 优化版本：忙等待+退避"""
+        import time as time_module
+        spin_count = 0
+        start_time = time_module.perf_counter() if timeout_ms >= 0 else None
+        
         while True:
             result = self.try_pop()
             if result is not None:
                 return result
             
-            if timeout_ms >= 0 and elapsed >= timeout_ms:
-                return None
+            if timeout_ms >= 0 and start_time:
+                elapsed_ms = (time_module.perf_counter() - start_time) * 1000
+                if elapsed_ms >= timeout_ms:
+                    return None
             
-            time.sleep(0.0001)  # 100 微秒
-            elapsed += 1
+            # 忙等待策略：前 1000 次快速轮询，然后逐渐增加延迟
+            if spin_count < 1000:
+                spin_count += 1
+            elif spin_count < 10000:
+                if spin_count % 100 == 0:
+                    time.sleep(0.000001)  # 1 微秒（尽可能短）
+                spin_count += 1
+            else:
+                time.sleep(0.00001)  # 10 微秒
+                spin_count = 0
 
 
 class ClientChannel:
