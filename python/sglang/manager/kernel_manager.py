@@ -11,6 +11,7 @@ from typing import Optional
 # --- Configuration ---
 SHM_NAME_SGLANG = "/kernel_scheduler_sglang"
 CLIENT_ID = "sglang"
+UNIQUE_ID = os.getenv("UNIQUE_ID")
 
 # SPSC 队列配置（必须与 C++ 端一致）
 SPSC_QUEUE_SIZE = 1024        # 队列可存储的消息数量
@@ -18,8 +19,10 @@ SPSC_MSG_SIZE = 256           # 每条消息的最大字节数
 CACHE_LINE_SIZE = 64          # CPU 缓存行大小
 
 def create_request_message(req_id: str, kernel_type: str) -> bytes:
-    """构建符合协议的消息: {kernel_type}|{req_id}|{client_id}"""
-    return f"{kernel_type}|{req_id}|{CLIENT_ID}\n".encode('utf-8')
+    """
+    构建符合协议的消息: {kernel_type}|{req_id}|{client_id}|{unique_id}
+    """
+    return f"{kernel_type}|{req_id}|{CLIENT_ID}|{UNIQUE_ID}\n".encode('utf-8')
 
 
 # --- 共享内存 SPSC 队列实现 ---
@@ -194,10 +197,12 @@ class Kernel(abc.ABC):
 class KernelManager:
     """
     单例客户端，用于管理与 C++ 调度器的通信。
+<<<<<<< HEAD
     使用共享内存 SPSC 队列进行通信。
     设计目标：线程安全、故障恢复、静默运行（仅报错时输出）。
+=======
+>>>>>>> 29fa3928a45333273a2efcefd2a33992657f761b
     """
-    
     def __init__(self):
         self.channel: Optional[ClientChannel] = None
         self.shm_fd: Optional[int] = None
@@ -208,13 +213,18 @@ class KernelManager:
         
         try:
             self._connect_to_scheduler()
+<<<<<<< HEAD
             # 仅在初始化成功时打印一次，后续保持静默
             print("[KernelManager] Connected to Scheduler via SHM.")
+=======
+            print(f"[KernelManager] Connected to Scheduler (UNIQUE_ID: {UNIQUE_ID}).")
+>>>>>>> 29fa3928a45333273a2efcefd2a33992657f761b
         except Exception as e:
             print(f"[KernelManager] Initialization failed: {e}", file=sys.stderr)
             # 不抛出异常，允许降级运行
 
     def _connect_to_scheduler(self):
+<<<<<<< HEAD
         """连接到调度器的共享内存"""
         import posix_ipc
         
@@ -246,21 +256,18 @@ class KernelManager:
             
         except posix_ipc.ExistentialError:
             raise ConnectionError(f"共享内存 {SHM_NAME_SGLANG} 不存在，调度器可能未启动")
+=======
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(5.0) 
+        self.sock.connect((LOCALHOST, SCHEDULER_PORT))
+        self.rfile = self.sock.makefile('rb')
+>>>>>>> 29fa3928a45333273a2efcefd2a33992657f761b
 
     def _generate_request_id(self) -> str:
         self.request_id_counter += 1
         return f"req_{self.request_id_counter}"
 
     def enqueue(self, kernel: Kernel):
-        """
-        向调度器提交内核。阻塞直到收到响应。
-        
-        流程:
-        1. 发送请求
-        2. 等待批准
-        3. 如果批准 -> 执行 kernel.execute()
-        4. 如果拒绝 -> 打印错误日志
-        """
         with self.lock:
             if not self.connected or not self.channel:
                 # 降级模式：直接执行内核
