@@ -218,15 +218,14 @@ class ClientRegistry:
     客户端注册表。
     与 C++ 端的 ClientRegistry 结构布局一致。
     
-    C++ ClientRegistryEntry 布局:
-    - offset 0:   alignas(64) atomic<bool> active      -> 占用 64 字节
-    - offset 64:  char shm_name[64]                    -> 64 字节
-    - offset 128: char client_type[16]                 -> 16 字节  
-    - offset 144: char unique_id[64]                   -> 64 字节
-    - offset 208: 需要对齐到 64 字节边界 -> offset 256
-    - offset 256: alignas(64) atomic<int64_t> client_pid -> 64 字节
-    - offset 320: alignas(64) atomic<uint64_t> heartbeat -> 64 字节
-    - 总大小: 384 字节
+    C++ ClientRegistryEntry 实际布局（g++ 确认）:
+    - offset 0:   alignas(64) atomic<bool> active      -> size 1，align 64
+    - offset 1:   char shm_name[64]                    -> size 64
+    - offset 65:  char client_type[16]                 -> size 16
+    - offset 81:  char unique_id[64]                   -> size 64
+    - offset 192: alignas(64) atomic<int64_t> client_pid -> size 8，align 64
+    - offset 256: alignas(64) atomic<uint64_t> heartbeat -> size 8，align 64
+    - 末尾按 64 字节对齐，sizeof(ClientRegistryEntry)=320
     """
     # 布局偏移量
     SCHEDULER_READY_OFFSET = 0                                    # atomic<bool>, 对齐到 64 字节
@@ -235,14 +234,14 @@ class ClientRegistry:
     
     # Entry 内部偏移量
     ENTRY_ACTIVE_OFFSET = 0
-    ENTRY_SHM_NAME_OFFSET = CACHE_LINE_SIZE                       # 64
-    ENTRY_CLIENT_TYPE_OFFSET = ENTRY_SHM_NAME_OFFSET + 64         # 128
-    ENTRY_UNIQUE_ID_OFFSET = ENTRY_CLIENT_TYPE_OFFSET + 16        # 144
-    ENTRY_CLIENT_PID_OFFSET = 4 * CACHE_LINE_SIZE                 # 256 (对齐后)
-    ENTRY_HEARTBEAT_OFFSET = 5 * CACHE_LINE_SIZE                  # 320 (对齐后)
+    ENTRY_SHM_NAME_OFFSET = 1
+    ENTRY_CLIENT_TYPE_OFFSET = ENTRY_SHM_NAME_OFFSET + 64         # 65
+    ENTRY_UNIQUE_ID_OFFSET = ENTRY_CLIENT_TYPE_OFFSET + 16        # 81
+    ENTRY_CLIENT_PID_OFFSET = 3 * CACHE_LINE_SIZE                 # 192 (对齐后)
+    ENTRY_HEARTBEAT_OFFSET = 4 * CACHE_LINE_SIZE                  # 256 (对齐后)
     
     # 单个 entry 大小
-    ENTRY_SIZE = 6 * CACHE_LINE_SIZE  # 384 字节
+    ENTRY_SIZE = 5 * CACHE_LINE_SIZE  # 320 字节
     
     TOTAL_SIZE = ENTRIES_OFFSET + ENTRY_SIZE * MAX_REGISTERED_CLIENTS
     
