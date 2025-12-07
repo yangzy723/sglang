@@ -10,7 +10,9 @@ from typing import Optional
 
 # --- Configuration ---
 SHM_NAME_PREFIX_SGLANG = "/ks_sglang_"
-SHM_NAME_REGISTRY = "/kernel_scheduler_registry"
+# 为避免跨用户冲突，注册表与通道名添加用户名后缀
+USER_NAME = os.getenv("USER", "nouser")
+SHM_NAME_REGISTRY = f"/kernel_scheduler_registry_{USER_NAME}"
 CLIENT_ID = "sglang"
 UNIQUE_ID = os.getenv("UNIQUE_ID", "")
 MAX_REGISTERED_CLIENTS = 64
@@ -18,7 +20,7 @@ MAX_REGISTERED_CLIENTS = 64
 def generate_shm_name() -> str:
     """生成唯一的共享内存通道名"""
     suffix = UNIQUE_ID if UNIQUE_ID else str(os.getpid())
-    return f"{SHM_NAME_PREFIX_SGLANG}{suffix}"
+    return f"{SHM_NAME_PREFIX_SGLANG}{USER_NAME}_{suffix}"
 
 # SPSC 队列配置（必须与 C++ 端一致）
 SPSC_QUEUE_SIZE = 1024        # 队列可存储的消息数量
