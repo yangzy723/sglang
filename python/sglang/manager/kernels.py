@@ -1,13 +1,18 @@
+"""
+具体 Kernel 实现。
+包含各种需要被调度执行的内核类。
+"""
+
 import torch
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
 from sgl_kernel import fused_add_rmsnorm, rmsnorm
 from sgl_kernel import FusedSetKVBufferArg, apply_rope_with_cos_sin_cache_inplace
 from sgl_kernel.flash_attn import flash_attn_with_kvcache
 
-from sglang.manager.kernel_manager import Kernel
-from sglang.manager.util import compute_position_kernel, write_req_to_token_pool_triton, clamp_position
+from .base import Kernel
+from .triton_ops import compute_position_kernel, write_req_to_token_pool_triton, clamp_position
 
 
 # Rebuilt-PyTorch/sglang-v0.5.4/python/sglang/srt/layers/activation.py
