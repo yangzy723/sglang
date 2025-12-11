@@ -3,10 +3,12 @@ KernelManager - 客户端入口。
 负责注册、通道建立、请求/响应及降级执行。
 """
 
+import atexit
 import os
 import sys
 import threading
 import time
+import weakref
 from typing import Optional
 
 from .config import CLIENT_ID, UNIQUE_ID, create_request_message
@@ -42,6 +44,9 @@ class KernelManager:
 
         try:
             self._connect_to_scheduler()
+            # 注册 atexit 清理函数，确保进程退出时清理共享内存
+            self._weak_self = weakref.ref(self)
+            atexit.register(self._atexit_cleanup)
             print(
                 f"[KernelManager] Connected to Scheduler via IPC "
                 f"(UNIQUE_ID: {UNIQUE_ID}, Channel: {self.channel_name})."
@@ -171,25 +176,43 @@ class KernelManager:
         关闭连接并清理资源。
         """
         with self.lock:
+            if not self.connected and self.channel is None:
+                return  # 已经清理过了
+
             if self.registry and self.registry_slot >= 0:
-                self.registry.unregister_client(self.registry_slot)
+                try:
+                    self.registry.unregister_client(self.registry_slot)
+                except Exception:
+                    pass
                 self.registry_slot = -1
 
             if self.channel:
-                self.channel.set_client_connected(False)
+                try:
+                    self.channel.set_client_connected(False)
+                except Exception:
+                    pass
 
             # 通过传输层关闭通道
-            self.transport.close_channel(self.channel_name, self.channel_handle)
+            if self.channel_name and self.transport:
+                self.transport.close_channel(self.channel_name, self.channel_handle)
             self.channel_handle = None
 
             # 通过传输层关闭注册表连接
-            self.transport.close_registry(self.registry_handle)
+            if self.transport:
+                self.transport.close_registry(self.registry_handle)
             self.registry_handle = None
 
             self.channel = None
             self.registry = None
             self.connected = False
             print(f"[KernelManager] Connection closed (Channel: {self.channel_name}).")
+
+    def _atexit_cleanup(self):
+        """atexit 回调，确保进程退出时清理共享内存"""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def __del__(self):
         self.close()
