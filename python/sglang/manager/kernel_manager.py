@@ -181,25 +181,25 @@ class KernelManager:
 
             if self.registry and self.registry_slot >= 0:
                 try:
-                    self.registry.unregister_client(self.registry_slot)
+                self.registry.unregister_client(self.registry_slot)
                 except Exception:
                     pass
                 self.registry_slot = -1
 
             if self.channel:
                 try:
-                    self.channel.set_client_connected(False)
+                self.channel.set_client_connected(False)
                 except Exception:
                     pass
 
             # 通过传输层关闭通道
             if self.channel_name and self.transport:
-                self.transport.close_channel(self.channel_name, self.channel_handle)
+            self.transport.close_channel(self.channel_name, self.channel_handle)
             self.channel_handle = None
 
             # 通过传输层关闭注册表连接
             if self.transport:
-                self.transport.close_registry(self.registry_handle)
+            self.transport.close_registry(self.registry_handle)
             self.registry_handle = None
 
             self.channel = None
