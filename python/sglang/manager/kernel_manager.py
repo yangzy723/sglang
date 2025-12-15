@@ -59,7 +59,6 @@ class KernelManager:
         req_msg = self.create_request_message(req_id, kernel)
 
         # 发送请求
-        print(f"[KernelManager] Sent request: {req_msg.strip()}")
         if not self.client.send_blocking(req_msg):
             print("[KernelManager] Send timeout. Skipping.", file=sys.stderr)
             return
